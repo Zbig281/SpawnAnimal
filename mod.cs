@@ -588,7 +588,37 @@ function SA_getPosFromGeo(%geoId)
    if (%geoId $= "")
       return "";
 
-   return "";
+   // we use BearData only as a helper to resolve GeoID -> world pos
+   if (!isObject(BearData))
+   {
+      echo("[SA] SA_getPosFromGeo: BearData not found, geo=" @ %geoId);
+      return "";
+   }
+
+   %tmp = new Animal()
+   {
+      dataBlock = BearData;
+      position  = "0 0 0";
+   };
+
+   if (!isObject(%tmp))
+      return "";
+
+   MissionCleanup.add(%tmp);
+
+   %ok = %tmp.TeleportTo(%geoId);
+   if (!%ok)
+   {
+      echo("[SA] TeleportTo(" @ %geoId @ ") failed");
+      %pos = "";
+   }
+   else
+   {
+      %pos = %tmp.getPosition();
+   }
+
+   %tmp.delete();
+   return %pos;
 }
 
 function SA_ensureRuleSet()
