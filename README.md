@@ -133,6 +133,7 @@ From console you can use:
     deleteById(objectId)
     deleteAll()
     SA_reloadConfig()
+    pos(charID) - Displays the player's current position. 
 
 All these animals behave like animals from rules (corpse cleanup etc.).
 
