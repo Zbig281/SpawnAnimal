@@ -1,7 +1,7 @@
 # LiF Custom Animal Spawner
 
 This mod lets you define fully automatic, server-side animal spawns from a simple config.ini file.
-Animals are spawned by rules (position or GeoID), cleaned up when they die (corpse trigger from the engine),
+Animals are spawned by rules (position), cleaned up when they die (corpse trigger from the engine),
 and never exceed the amount you specify.
 
 Everything runs on the server — no client files are required.
@@ -10,7 +10,7 @@ Everything runs on the server — no client files are required.
 
 ## What the mod does
 
-1. Spawns animals from rules defined in config.ini (by pos or GeoID, optionally within a radius).
+1. Spawns animals from rules defined in config.ini (by pos, optionally within a radius).
 2. Listens to the engine event that creates corpse objects (TSStatic / ComplexObject) and matches them to your spawned animals.
 3. When a corpse appears on top of one of your animals, that animal is removed shortly after (prevents infinite corpse loops).
 
@@ -43,9 +43,7 @@ No client setup required.
 Each active rule is one line in this exact format (NO SPACES around commas):
 
     (I,DataBlockName,Quality,pos=X Y Z,T=MINUTES)
-    (I,DataBlockName,Quality,GeoID=NUMBER,T=MINUTES)
     (I,DataBlockName,Quality,pos=X Y Z,r=R,T=MINUTES)
-    (I,DataBlockName,Quality,GeoID=NUMBER,r=R,T=MINUTES)
 
 Where:
 
@@ -53,15 +51,14 @@ I                 = how many animals the rule wants alive at the same time
 DataBlockName     = animal datablock (Example: BearData, WolfData, TribeBData...)  
 Quality           = value for setQuality()  
 pos=X Y Z         = fixed world position  
-GeoID=NUMBER      = spawns using a GeoID center  
 r=R               = radius around the center (optional)  
 T=MINUTES         = respawn frequency  
 
 Important rules:
 
 - NO spaces around commas:
-      (3,WolfData,60,GeoID=117042676,r=30,T=2)   ← OK
-      (3, WolfData, 60, GeoID=117042676, r=30, T=2) ← INVALID
+      (3,WolfData,60,pos=973.473 -19.7167 1013.5,r=30,T=2)   ← OK
+      (3, WolfData, 60, pos=973.473 -19.7167 1013.5, r=30, T=2) ← INVALID
 
 - Spaces inside pos= ARE allowed:
       pos=973.473 -19.7167 1013.5
@@ -70,17 +67,11 @@ Important rules:
 
 ## Example config.ini
 
-    # 3 wolves around GeoID=117042676 within radius 30, check every 2 minutes
-    (3,WolfData,60,GeoID=117042676,r=30,T=2)
-
     # 1 wolf at an exact position, check every 1 minute
     (1,WolfData,50,pos=973.473 -19.7167 1013.5,T=1)
 
     # 5 bears around a camp location, radius 40, respawn every 5 minutes
     (5,BearData,80,pos=327.964 1416.77 1536.3,r=40,T=5)
-
-    # 4 humanoids (tribe) around a GeoID, radius 50, respawn every 3 minutes
-    (4,TribeBData,100,GeoID=117042676,r=50,T=3)
 
 Add as many rules as you wish — each works independently.
 
@@ -94,7 +85,7 @@ Each rule stores:
 
 - target count (I)
 - datablock name
-- base position (pos or GeoID)
+- base position (pos)
 - radius r
 - timer interval T
 - list of currently alive animals spawned by this rule
