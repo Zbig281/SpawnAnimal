@@ -1,35 +1,22 @@
-// ============================================================================
-// mods/SpawnAnimal/mod.cs  (server-side, ASCII)
-// Spawn by command / by coords / from config.ini
-// No corpse-ticks – only EVENT SimGroup::onObjectAdded
-// Supports "I = count" per rule in config.ini + region limit (50 + r).
-// Auto-spawn from config.ini starts ONLY after first player enters the game.
-// ============================================================================
-
-// --- Hot reload package
+// --- Hot reload pakietu
 if (isFunction("deactivatePackage") && isPackage("SpawnAnimalPkg"))
 {
    deactivatePackage(SpawnAnimalPkg);
 }
 
 // ============================================================================
-// Global config
+// Konfiguracja globalna
 // ============================================================================
 
-$SA_LIFT                 = 2.0;       // how high above terrain to lift spawn
-$SA_PROBE_R              = 4.0;       // terrain probe radius
-$SA_PROBE_STEP           = 1.0;
+$SA_LIFT          = 2.0;    // if we lift the spawn above the surface
+$SA_PROBE_R       = 4.0;    // additional search radius Z
+$SA_PROBE_STEP    = 1.0;
+$SA_KILL_DELAY_MS = 600;   // delay in killing the bear after detecting the carcass (ms)
 
-$SA_CORPSE_EVENT_RADIUS  = 0.5;       // max distance between corpse and our Animal to link them
-$SA_CORPSE_KILL_DELAY_MS = 600;       // delay before deleting Animal after corpse detected (ms)
-
-$SA_CFG_FILE             = "mods/SpawnAnimal/config.ini";
-
-// flag: have we already started auto-spawns from config?
-$SA_ConfigStarted        = 0;
+$SA_CFG_PATH      = "mods/SpawnAnimal/config.ini";
 
 // ============================================================================
-// General helpers
+// Helpery
 // ============================================================================
 
 function SA_min(%a, %b) { return (%a < %b ? %a : %b); }
@@ -46,23 +33,27 @@ function SA_name(%o)
 
 function SA_isOurAnimal(%o)
 {
-   return (isObject(%o) &&
-           %o.getClassName() $= "Animal" &&
-           %o.spawnedByMod);
+   return (isObject(%o) && %o.getClassName() $= "Animal" && %o.sa_spawnedByMod);
 }
 
 function SA_toInt(%v)
 {
+   %v = trim(%v);
+   if (%v $= "")
+      return 0;
    return mFloor(%v + 0);
 }
 
 function SA_toFloat(%v)
 {
+   %v = trim(%v);
+   if (%v $= "")
+      return 0.0;
    return %v + 0.0;
 }
 
 // ============================================================================
-// Terrain / Z / water
+// Terrain / Z / woda
 // ============================================================================
 
 function SA_getTerrainAABB(%out)
@@ -203,7 +194,7 @@ function SA_offset(%x, %y, %radius)
 }
 
 // ============================================================================
-// Clients
+// Klienci + komenda pos(CharID)
 // ============================================================================
 
 function SA_clientCount()
@@ -242,8 +233,31 @@ function listOnlineClients()
    }
 }
 
+// pos(CharID) – szybki podgląd pozycji gracza do config.ini
+function pos(%charId)
+{
+   if (%charId $= "")
+   {
+      %cl = (SA_clientCount() == 1 ? ClientGroup.getObject(0) : 0);
+   }
+   else
+   {
+      %cl = SA_findConnByCharId(%charId);
+   }
+
+   if (!isObject(%cl) || !isObject(%cl.player))
+   {
+      echo("[SA:POS] no active player for charId=" @ %charId);
+      return "";
+   }
+
+   %p = %cl.player.getPosition();
+   echo("[SA:POS] charId=" @ %cl.charId @ " pos=" @ %p);
+   return %p;
+}
+
 // ============================================================================
-// Our animals registry
+// Rejestr naszych zwierząt
 // ============================================================================
 
 if (!isObject(SpawnAnimalSet))
@@ -257,7 +271,7 @@ function SA_ensureSet()
 }
 
 // ============================================================================
-// Low-level spawn
+// Spawn – KOŁO GRACZA + inne
 // ============================================================================
 
 function SA_spawnOne(%scopeClient, %breed, %q, %x, %y, %z, %yawDeg)
@@ -270,7 +284,6 @@ function SA_spawnOne(%scopeClient, %breed, %q, %x, %y, %z, %yawDeg)
 
    if (%q $= "")
       %q = 60;
-   %q = SA_toInt(%q);
    if (%yawDeg $= "")
       %yawDeg = 0;
 
@@ -312,7 +325,8 @@ function SA_spawnOne(%scopeClient, %breed, %q, %x, %y, %z, %yawDeg)
    MissionCleanup.add(%an);
    SA_ensureSet().add(%an);
 
-   %an.spawnedByMod = true;
+   %an.sa_spawnedByMod = true;
+   %an.sa_corpseDebug  = true;
 
    if (%an.isMethod("setTemporary"))
       %an.setTemporary(true);
@@ -338,11 +352,7 @@ function SA_spawnOne(%scopeClient, %breed, %q, %x, %y, %z, %yawDeg)
    return %an;
 }
 
-// ============================================================================
-// Spawn – command API
-// ============================================================================
-
-// spawnAtChar(charId, BearData, 60, 0);
+// Spawn KOŁO GRACZA
 function spawnAtChar(%charId, %breed, %q, %yawDeg)
 {
    if (%charId $= "")
@@ -369,7 +379,7 @@ function spawnAtChar(%charId, %breed, %q, %yawDeg)
    return %an;
 }
 
-// spawnAt(BearData, 60, x, y, z, yawDeg, charIdForScope);
+// Spawn na konkretnych koordach
 function spawnAt(%breed, %q, %x, %y, %z, %yawDeg, %charIdForScope)
 {
    if (%charIdForScope $= "")
@@ -381,7 +391,7 @@ function spawnAt(%breed, %q, %x, %y, %z, %yawDeg, %charIdForScope)
    return %an;
 }
 
-// spawnCluster(BearData, 5, cx, cy, cz, 10, 60, charIdForScope);
+// Spawn grupowy (ręczny)
 function spawnCluster(%breed, %count, %cx, %cy, %cz, %radius, %q, %charIdForScope)
 {
    if (%count $= "" || %count < 1)
@@ -412,10 +422,9 @@ function spawnCluster(%breed, %count, %cx, %cy, %cz, %radius, %q, %charIdForScop
 }
 
 // ============================================================================
-// Tools: list / manual delete
+// Narzędzia: lista / usuwanie
 // ============================================================================
 
-//listSpawned();
 function listSpawned()
 {
    SA_ensureSet();
@@ -430,7 +439,6 @@ function listSpawned()
    }
 }
 
-//deleteById(%id);
 function deleteById(%id)
 {
    %o = (%id !$= "" && isObject(%id)) ? %id : 0;
@@ -448,7 +456,6 @@ function deleteById(%id)
    return 1;
 }
 
-// deleteAll();
 function deleteAll()
 {
    if (!isObject(SpawnAnimalSet))
@@ -461,7 +468,7 @@ function deleteAll()
             %o = MissionCleanup.getObject(%i);
             if (isObject(%o) &&
                 %o.getClassName() $= "Animal" &&
-                %o.spawnedByMod)
+                %o.sa_spawnedByMod)
             {
                %o.delete();
                %k++;
@@ -486,7 +493,7 @@ function deleteAll()
 }
 
 // ============================================================================
-// CORPSE EVENT: handle corpse
+// Corpse trigger (EVENT) – używa onObjectAdded, bez ticka
 // ============================================================================
 
 function SA_findClosestOurAnimal(%pos, %maxDist)
@@ -494,57 +501,42 @@ function SA_findClosestOurAnimal(%pos, %maxDist)
    if (!isObject(SpawnAnimalSet))
       return 0;
 
-   %best    = 0;
-   %bestDst = 1e9;
+   %best   = 0;
+   %bestD2 = %maxDist * %maxDist;
 
    %n = SpawnAnimalSet.getCount();
    for (%i = 0; %i < %n; %i++)
    {
       %an = SpawnAnimalSet.getObject(%i);
-      if (!isObject(%an))
-         continue;
-
       if (!SA_isOurAnimal(%an))
          continue;
 
       %apos = %an.getPosition();
-      %dst  = vectorDist(%pos, %apos);
+      %d    = vectorDist(%pos, %apos);
+      %d2   = %d * %d;
 
-      if (%dst < %maxDist && %dst < %bestDst)
+      if (%d2 < %bestD2)
       {
-         %best    = %an;
-         %bestDst = %dst;
+         %best   = %an;
+         %bestD2 = %d2;
       }
    }
 
-   if (isObject(%best))
-      return %best;
-   return 0;
+   return %best;
 }
 
 function SA_killAnimalDelayed(%anId)
 {
    %an = %anId;
-   if (!isObject(%an))
+   if (!isObject(%an) || %an.getClassName() !$= "Animal")
       return;
-
-   echo("[SA:CORPSE:KILL] removing Animal " @ SA_name(%an));
 
    if (isObject(SpawnAnimalSet) && SpawnAnimalSet.isMember(%an))
       SpawnAnimalSet.remove(%an);
 
-   // detach from spawn rule, if any
-   if (%an.sa_spawnRuleId !$= "")
-   {
-      %rule = %an.sa_spawnRuleId;
-      if (isObject(%rule) && isObject(%rule.animalSet))
-      {
-         if (%rule.animalSet.isMember(%an))
-            %rule.animalSet.remove(%an);
-      }
-   }
-
+   %info = SA_name(%an);
    %an.delete();
+   echo("[SA:CORPSE:KILL] removed Animal " @ %info @ " (delayed)");
 }
 
 function SA_handleCorpseObject(%group, %obj)
@@ -556,453 +548,311 @@ function SA_handleCorpseObject(%group, %obj)
    if (%cls !$= "TSStatic" && %cls !$= "ComplexObject")
       return;
 
-   %pos = (%obj.isMethod("getPosition") ? %obj.getPosition() : "");
-   if (%pos $= "")
+   %pos = (%obj.isMethod("getPosition") ? %obj.getPosition() : "?");
+   if (%pos $= "?")
       return;
 
-   %rad = ($SA_CORPSE_EVENT_RADIUS $= "" ? 0.5 : $SA_CORPSE_EVENT_RADIUS);
+   %maxMatchDist = 0.5;
 
-   %an = SA_findClosestOurAnimal(%pos, %rad);
+   %an = SA_findClosestOurAnimal(%pos, %maxMatchDist);
    if (!isObject(%an))
       return;
 
-   %dst = mFloatLength(vectorDist(%pos, %an.getPosition()), 4);
+   %apos = %an.getPosition();
+   %dist = mFloatLength(vectorDist(%pos, %apos), 4);
 
-   echo("[SA:CORPSE:TRIGGER] corpseObj=" @ %obj.getId()
+   echo("[SA:CORPSE:TRIGGER] group=" @ (isObject(%group) ? %group.getName() : "0")
+        @ " corpseObj=" @ %obj.getId()
         @ " class=" @ %cls
         @ " pos=" @ %pos
         @ " -> matchAnimal=" @ SA_name(%an)
-        @ " dist=" @ %dst);
+        @ " dist=" @ %dist);
 
-   %delay = ($SA_CORPSE_KILL_DELAY_MS $= "" ? 1000 : $SA_CORPSE_KILL_DELAY_MS);
-   schedule(%delay, 0, "SA_killAnimalDelayed", %an);
+   schedule(($SA_KILL_DELAY_MS $= "" ? 1000 : $SA_KILL_DELAY_MS),
+            0, "SA_killAnimalDelayed", %an);
 }
 
 // ============================================================================
-// CONFIG.INI – auto spawn from file (with I = count)
+// Reguły z config.ini – TYLKO pos=..., max 1 żywy Animal na regułę (prosty wariant)
 // ============================================================================
 
-function SA_getPosFromGeo(%geoId)
-{
-   %geoId = trim(%geoId);
-   if (%geoId $= "")
-      return "";
-
-   // we use BearData only as a helper to resolve GeoID -> world pos
-   if (!isObject(BearData))
-   {
-      echo("[SA] SA_getPosFromGeo: BearData not found, geo=" @ %geoId);
-      return "";
-   }
-
-   %tmp = new Animal()
-   {
-      dataBlock = BearData;
-      position  = "0 0 0";
-   };
-
-   if (!isObject(%tmp))
-      return "";
-
-   MissionCleanup.add(%tmp);
-
-   %ok = %tmp.TeleportTo(%geoId);
-   if (!%ok)
-   {
-      echo("[SA] TeleportTo(" @ %geoId @ ") failed");
-      %pos = "";
-   }
-   else
-   {
-      %pos = %tmp.getPosition();
-   }
-
-   %tmp.delete();
-   return %pos;
-}
+if (!isObject(SpawnAnimalRuleSet))
+   new SimSet(SpawnAnimalRuleSet);
 
 function SA_ensureRuleSet()
 {
-   if (!isObject(SA_RuleSet))
-      new SimSet(SA_RuleSet);
-   return SA_RuleSet;
+   if (!isObject(SpawnAnimalRuleSet))
+      new SimSet(SpawnAnimalRuleSet);
+   return SpawnAnimalRuleSet;
 }
 
-// Rule object fields:
-//   maxCount, dbName, quality, geoId, hasPos, pos, radius, periodMin,
-//   animalSet (SimSet of alive animals), scheduleHandle
-function SA_makeRule(%count, %dbName, %q, %geoId, %hasPos, %pos, %radius, %Tmin)
+function SA_makeRule(%count, %dbName, %q, %posStr, %radius, %Tmin)
 {
-   %count = SA_toInt(%count);
-   %Tmin  = SA_toFloat(%Tmin);
-
-   if (%count < 1)
-      %count = 1;
-
-   if (%dbName $= "" || %q $= "")
+   %r = new ScriptObject(SA_SpawnRule)
    {
-      echo("[SA:CFG] SA_makeRule: empty dbName or quality");
-      return 0;
-   }
-
-   if (%geoId $= "" && !%hasPos)
-   {
-      echo("[SA:CFG] SA_makeRule: neither GeoID nor pos specified");
-      return 0;
-   }
-
-   if (%Tmin <= 0)
-   {
-      echo("[SA:CFG] SA_makeRule: T<=0 for db=" @ %dbName);
-      return 0;
-   }
-
-   %r = new ScriptObject()
-   {
-      class      = "SA_SpawnRule";
-      maxCount   = %count;
-      dbName     = %dbName;
-      quality    = %q;
-      geoId      = %geoId;
-      hasPos     = %hasPos;
-      pos        = %pos;
-      radius     = (%radius $= "" ? 0 : %radius);
-      periodMin  = %Tmin;
-      scheduleHandle = 0;
+      count      = SA_toInt(%count);      // w tej wersji i tak 1, ale parsujemy
+      dbName     = trim(%dbName);
+      quality    = SA_toInt(%q);
+      posStr     = %posStr;               // "x y z"
+      radius     = SA_toFloat(%radius);   // 0 -> spawn dokładnie w pos
+      periodMin  = SA_toFloat(%Tmin);     // co ile minut sprawdzamy
+      lastAnimal = 0;                     // max 1 żywy per rule
    };
 
-   %r.animalSet = new SimSet();
+   if (%r.count <= 0)
+      %r.count = 1;
+
    SA_ensureRuleSet().add(%r);
 
-   echo("[SA:CFG] rule created count=" @ %count
-        @ " db=" @ %dbName
-        @ " q=" @ %q
-        @ " geoId=" @ %geoId
-        @ " pos=" @ %pos
+   echo("[SA:CFG] rule created count=" @ %r.count
+        @ " db=" @ %r.dbName
+        @ " q=" @ %r.quality
+        @ " pos=" @ %r.posStr
         @ " r=" @ %r.radius
-        @ " T=" @ %Tmin);
+        @ " T=" @ %r.periodMin);
 
    return %r;
 }
 
-// resolve pos for rule (from GeoID if needed)
-function SA_ruleResolvePos(%r)
+function SA_ruleResolvePos(%rule)
 {
-   if (!isObject(%r))
+   if (!isObject(%rule))
       return "";
 
-   if (%r.hasPos && %r.pos !$= "")
-      return %r.pos;
-
-   if (%r.geoId !$= "")
-   {
-      %pos = SA_getPosFromGeo(%r.geoId);
-      if (%pos $= "")
-         return "";
-
-      %r.pos    = %pos;
-      %r.hasPos = true;
-      return %pos;
-   }
-
-   return "";
+   return %rule.posStr;
 }
 
-// count & cleanup alive animals in this rule (without region cull)
 function SA_SpawnRule::getAliveCount(%this)
 {
    %alive = 0;
 
-   if (!isObject(%this.animalSet))
-      return 0;
-
-   for (%i = %this.animalSet.getCount() - 1; %i >= 0; %i--)
+   if (isObject(%this.lastAnimal))
    {
-      %an = %this.animalSet.getObject(%i);
-      if (!isObject(%an) || %an.getClassName() !$= "Animal")
-      {
-         %this.animalSet.remove(%an);
-         continue;
-      }
-
-      %alive++;
+      if (%this.lastAnimal.getClassName() $= "Animal")
+         %alive = 1;
+      else
+         %this.lastAnimal = 0;
    }
 
    return %alive;
 }
 
-// actual spawn + region cull + re-schedule
 function SA_SpawnRule::doSpawn(%this)
 {
-   // resolve center position (GeoID or pos)
-   %pos = SA_ruleResolvePos(%this);
-   if (%pos $= "")
-   {
-      echo("[SA:RULE] cannot resolve pos for rule db=" @ %this.dbName
-           @ " geoId=" @ %this.geoId);
-      %nextMs = (%this.periodMin * 60 * 1000);
-      %this.scheduleHandle = %this.schedule(%nextMs, "doSpawn");
+   if (!isObject(%this))
       return;
-   }
 
-   %cx = getWord(%pos, 0);
-   %cy = getWord(%pos, 1);
-   %cz = getWord(%pos, 2);
-
-   // compute spawn radius (for distribution)
-   %baseRadius = %this.radius;
-   if (%baseRadius <= 0)
-   {
-      if (%this.maxCount > 1)
-         %baseRadius = 10 * mSqrt(%this.maxCount);   // auto spread for herds
-      else
-         %baseRadius = 0;
-   }
-
-   // compute region limit: 50 + baseRadius
-   %limitR = 50 + %baseRadius;
-
-   // region cull – remove animals that left region (anti-exploit, anti-bug)
-   if (isObject(%this.animalSet))
-   {
-      for (%i = %this.animalSet.getCount() - 1; %i >= 0; %i--)
-      {
-         %an = %this.animalSet.getObject(%i);
-         if (!isObject(%an) || %an.getClassName() !$= "Animal")
-         {
-           %this.animalSet.remove(%an);
-           continue;
-         }
-
-         %apos = %an.getPosition();
-         %dst  = vectorDist(%pos, %apos);
-
-         if (%dst > %limitR)
-         {
-            echo("[SA:RULE:OUT] removing Animal out of region db=" @ %this.dbName
-                 @ " an=" @ SA_name(%an)
-                 @ " dist=" @ mFloatLength(%dst, 2)
-                 @ " limit=" @ %limitR);
-
-            %this.animalSet.remove(%an);
-            if (isObject(SpawnAnimalSet) && SpawnAnimalSet.isMember(%an))
-               SpawnAnimalSet.remove(%an);
-            %an.delete();
-         }
-      }
-   }
-
-   // now count alive after region cleanup
    %alive = %this.getAliveCount();
-
-   // HARD cap: if already >= maxCount, absolutely no new spawns
-   if (%alive >= %this.maxCount)
+   if (%alive >= 1)
    {
-      %nextMs = (%this.periodMin * 60 * 1000);
-      %this.scheduleHandle = %this.schedule(%nextMs, "doSpawn");
+      if (%this.periodMin > 0)
+         %this.schedule(%this.periodMin * 60 * 1000, "doSpawn");
       return;
    }
 
-   %need  = %this.maxCount - %alive;
-
-   %db = %this.dbName;
-   if (!isObject(%db))
+   %center = SA_ruleResolvePos(%this);
+   if (%center $= "")
    {
-      echo("[SA:RULE] invalid datablock " @ %this.dbName);
+      echo("[SA:RULE] cannot resolve pos for rule db=" @ %this.dbName);
+      if (%this.periodMin > 0)
+         %this.schedule(%this.periodMin * 60 * 1000, "doSpawn");
+      return;
+   }
+
+   %cx = getWord(%center, 0);
+   %cy = getWord(%center, 1);
+   %cz = getWord(%center, 2);
+
+   %r = (%this.radius > 0 ? %this.radius : 0);
+
+   if (%r > 0)
+   {
+      %xy = SA_offset(%cx, %cy, %r * (0.4 + 0.6 * getRandom()));
+      %sx = getWord(%xy, 0);
+      %sy = getWord(%xy, 1);
    }
    else
    {
-      for (%k = 0; %k < %need; %k++)
-      {
-         if (%baseRadius > 0)
-         {
-            %xy = SA_offset(%cx, %cy, %baseRadius * (0.4 + 0.6 * getRandom()));
-            %sx = getWord(%xy, 0);
-            %sy = getWord(%xy, 1);
-         }
-         else
-         {
-            %sx = %cx;
-            %sy = %cy;
-         }
-
-         %sz = %cz;
-
-         %an = SA_spawnOne(0, %db, %this.quality, %sx, %sy, %sz,
-                           mFloor(getRandom() * 360));
-         if (isObject(%an))
-         {
-            %an.sa_spawnRuleId = %this.getId();
-            if (!isObject(%this.animalSet))
-               %this.animalSet = new SimSet();
-            %this.animalSet.add(%an);
-         }
-      }
+      %sx = %cx;
+      %sy = %cy;
    }
 
-   // Safety clamp: if somehow we have more than maxCount, remove extras.
-   %alive2 = %this.getAliveCount();
-   if (%alive2 > %this.maxCount && isObject(%this.animalSet))
+   %dbName = %this.dbName;
+   if (!isObject(%dbName))
    {
-      %over = %alive2 - %this.maxCount;
-      for (%i = %this.animalSet.getCount() - 1; %i >= 0 && %over > 0; %i--)
-      {
-         %an2 = %this.animalSet.getObject(%i);
-         if (!isObject(%an2))
-         {
-            %this.animalSet.remove(%an2);
-            continue;
-         }
-
-         echo("[SA:RULE:CLAMP] too many animals for rule db=" @ %this.dbName
-              @ " removing extra " @ SA_name(%an2));
-
-         %this.animalSet.remove(%an2);
-         if (isObject(SpawnAnimalSet) && SpawnAnimalSet.isMember(%an2))
-            SpawnAnimalSet.remove(%an2);
-         %an2.delete();
-         %over--;
-      }
+      echo("[SA:RULE] invalid datablock " @ %dbName);
+      if (%this.periodMin > 0)
+         %this.schedule(%this.periodMin * 60 * 1000, "doSpawn");
+      return;
    }
 
-   %nextMs = (%this.periodMin * 60 * 1000);
-   %this.scheduleHandle = %this.schedule(%nextMs, "doSpawn");
+   %an = SA_spawnOne(0, %dbName, %this.quality, %sx, %sy, %cz, mFloor(getRandom() * 360));
+   if (isObject(%an))
+      %this.lastAnimal = %an;
+
+   if (%this.periodMin > 0)
+      %this.schedule(%this.periodMin * 60 * 1000, "doSpawn");
 }
 
-// read config.ini
 function SA_loadConfig()
 {
-   if (isObject(SA_RuleSet))
-      SA_RuleSet.delete();
-   new SimSet(SA_RuleSet);
+   SA_ensureRuleSet();
 
-   %file = $SA_CFG_FILE;
+   while (SpawnAnimalRuleSet.getCount() > 0)
+   {
+      %r = SpawnAnimalRuleSet.getObject(0);
+      SpawnAnimalRuleSet.remove(%r);
+      %r.delete();
+   }
+
+   %file = $SA_CFG_PATH;
+   if (%file $= "")
+      %file = "mods/SpawnAnimal/config.ini";
+
    if (!isFile(%file))
    {
-      echo("[SA:CFG] no config.ini: " @ %file);
+      echo("[SA:CFG] no config file " @ %file);
       return;
    }
 
-   %fo = new FileObject();
-   if (!%fo.openForRead(%file))
-   {
-      echo("[SA:CFG] cannot open " @ %file);
-      %fo.delete();
-      return;
-   }
+   %fh = new FileObject();
+   %fh.openForRead(%file);
 
-   %lineNo = 0;
-   while (!%fo.isEOF())
+   %lineNum = 0;
+   %rules   = 0;
+
+   while (!%fh.isEOF())
    {
-      %line   = %fo.readLine();
-      %lineNo++;
+      %line = %fh.readLine();
+      %lineNum++;
 
       %trim = trim(%line);
       if (%trim $= "")
          continue;
 
-      %c  = getSubStr(%trim, 0, 1);
-      %c2 = getSubStr(%trim, 0, 2);
-      if (%c $= "#" || %c $= ";" || %c2 $= "//")
+      %first = getSubStr(%trim, 0, 1);
+      if (%first $= "#" || %first $= ";")
          continue;
 
-      // strip optional parentheses
+      if (getSubStr(%trim, 0, 2) $= "//")
+         continue;
+
       if (getSubStr(%trim, 0, 1) $= "(" &&
-          getSubStr(%trim, strLen(%trim) - 1, 1) $= ")")
+          getSubStr(%trim, strlen(%trim) - 1, 1) $= ")")
       {
-         %trim = getSubStr(%trim, 1, strLen(%trim) - 2);
-         %trim = trim(%trim);
+         %trim = getSubStr(%trim, 1, strlen(%trim) - 2);
       }
 
-      %l  = strreplace(%trim, ",", " ");
-      %l  = trim(%l);
-      %wc = getWordCount(%l);
-      if (%wc < 4)
+      %firstComma = strstr(%trim, ",");
+      if (%firstComma == -1)
       {
-         echo("[SA:CFG] line " @ %lineNo @ ": too short -> " @ %trim);
+         echo("[SA:CFG] line " @ %lineNum @ ": invalid syntax -> " @ %line);
          continue;
       }
 
-      // format:
-      //   0: count (I)
-      //   1: dbName
-      //   2: quality
-      //   3..: pos / GeoID / r / T
+      %cntStr = trim(getSubStr(%trim, 0, %firstComma));
+      %rest1  = getSubStr(%trim, %firstComma + 1, 1000);
 
-      %count  = getWord(%l, 0);
-      %dbName = getWord(%l, 1);
-      %q      = getWord(%l, 2);
-
-      %geoId    = "";
-      %radius   = 0;
-      %Tmin     = 0;
-      %hasPos   = false;
-      %pos      = "";
-
-      for (%i = 3; %i < %wc; %i++)
+      %secondComma = strstr(%rest1, ",");
+      if (%secondComma == -1)
       {
-         %w  = getWord(%l, %i);
-         %wl = strlwr(%w);
-
-         if (getSubStr(%wl, 0, 4) $= "pos=")
-         {
-            %vx = getSubStr(%w, 4, 1024);
-            %vy = (%i + 1 < %wc ? getWord(%l, %i + 1) : "");
-            %vz = (%i + 2 < %wc ? getWord(%l, %i + 2) : "");
-            %pos    = %vx SPC %vy SPC %vz;
-            %hasPos = true;
-            %i += 2;
-            continue;
-         }
-
-         if (getSubStr(%wl, 0, 6) $= "geoid=")
-         {
-            %geoId = getSubStr(%w, 6, 1024);
-            continue;
-         }
-
-         if (getSubStr(%wl, 0, 2) $= "r=")
-         {
-            %radius = getSubStr(%w, 2, 1024);
-            continue;
-         }
-
-         if (getSubStr(%wl, 0, 2) $= "t=")
-         {
-            %Tmin = getSubStr(%w, 2, 1024);
-            continue;
-         }
+         echo("[SA:CFG] line " @ %lineNum @ ": invalid syntax -> " @ %line);
+         continue;
       }
 
-      %rule = SA_makeRule(%count, %dbName, %q, %geoId, %hasPos, %pos, %radius, %Tmin);
-      if (!isObject(%rule))
+      %dbStr = trim(getSubStr(%rest1, 0, %secondComma));
+      %rest2 = getSubStr(%rest1, %secondComma + 1, 1000);
+
+      %thirdComma = strstr(%rest2, ",");
+      if (%thirdComma == -1)
       {
-         echo("[SA:CFG] line " @ %lineNo @ ": invalid rule -> " @ %trim);
+         %qStr   = trim(%rest2);
+         %cfgStr = "";
       }
+      else
+      {
+         %qStr   = trim(getSubStr(%rest2, 0, %thirdComma));
+         %cfgStr = getSubStr(%rest2, %thirdComma + 1, 1000);
+      }
+
+      if (%cntStr $= "" || %dbStr $= "" || %qStr $= "")
+      {
+         echo("[SA:CFG] line " @ %lineNum @ ": invalid syntax -> " @ %line);
+         continue;
+      }
+
+      %posStr = "";
+      %radius = 0;
+      %T      = 0;
+
+      // pos= X Y Z
+      %idxPos = strstr(%cfgStr, "pos=");
+      if (%idxPos != -1)
+      {
+         %afterPos = getSubStr(%cfgStr, %idxPos + 4, 1000);
+         %commaPos = strstr(%afterPos, ",");
+         if (%commaPos == -1)
+            %coords = trim(%afterPos);
+         else
+            %coords = trim(getSubStr(%afterPos, 0, %commaPos));
+
+         if (getWordCount(%coords) == 3)
+            %posStr = %coords;
+      }
+
+      // r=R
+      %idxR = strstr(%cfgStr, "r=");
+      if (%idxR != -1)
+      {
+         %afterR = getSubStr(%cfgStr, %idxR + 2, 1000);
+         %commaR = strstr(%afterR, ",");
+         if (%commaR == -1)
+            %rStr = trim(%afterR);
+         else
+            %rStr = trim(getSubStr(%afterR, 0, %commaR));
+         %radius = %rStr;
+      }
+
+      // T=MINUTES
+      %idxT = strstr(%cfgStr, "T=");
+      if (%idxT != -1)
+      {
+         %afterT = getSubStr(%cfgStr, %idxT + 2, 1000);
+         %commaT = strstr(%afterT, ",");
+         if (%commaT == -1)
+            %TStr = trim(%afterT);
+         else
+            %TStr = trim(getSubStr(%afterT, 0, %commaT));
+         %T = %TStr;
+      }
+
+      if (%posStr $= "")
+      {
+         echo("[SA:CFG] line " @ %lineNum @ ": missing pos= for rule -> " @ %line);
+         continue;
+      }
+
+      %rule = SA_makeRule(%cntStr, %dbStr, %qStr, %posStr, %radius, %T);
+      if (isObject(%rule))
+         %rules++;
    }
 
-   %fo.close();
-   %fo.delete();
+   %fh.close();
+   %fh.delete();
 
-   echo("[SA:CFG] loaded rules: " @ SA_RuleSet.getCount());
+   echo("[SA:CFG] loaded rules: " @ %rules);
 }
 
 function SA_startAutoSpawns()
 {
-   if (!isObject(SA_RuleSet))
-      return;
+   SA_ensureRuleSet();
 
-   %n = SA_RuleSet.getCount();
+   %n = SpawnAnimalRuleSet.getCount();
    for (%i = 0; %i < %n; %i++)
    {
-      %r = SA_RuleSet.getObject(%i);
-      if (!isObject(%r))
-         continue;
-
-      if (%r.periodMin <= 0)
-         continue;
-
-      %r.doSpawn();
+      %r = SpawnAnimalRuleSet.getObject(%i);
+      if (%r.periodMin > 0)
+         %r.schedule(1000 + %i * 500, "doSpawn");
    }
 }
 
@@ -1010,21 +860,7 @@ function SA_reloadConfig()
 {
    SA_loadConfig();
    SA_startAutoSpawns();
-   $SA_ConfigStarted = 1;
 }
-
-// (first player enters game)
-function SA_ensureStarted()
-{
-   if ($SA_ConfigStarted)
-      return;
-
-   SA_reloadConfig();
-}
-
-// ============================================================================
-// PACKAGE – corpse onObjectAdded + delayed config start
-// ============================================================================
 
 package SpawnAnimalPkg
 {
@@ -1036,13 +872,6 @@ package SpawnAnimalPkg
    function RootGroup::onObjectAdded(%this, %obj)
    {
       SA_handleCorpseObject(%this, %obj);
-   }
-
-   // first player entering game will kick off config-based spawns
-   function GameConnection::onClientEnterGame(%this)
-   {
-      Parent::onClientEnterGame(%this);
-      SA_ensureStarted();
    }
 };
 
